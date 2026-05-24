@@ -1,110 +1,112 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-import { getCurrentUserRequest, loginRequest } from "../api/authApi.js";
-import {
-  TOKEN_STORAGE_KEY,
-  USER_STORAGE_KEY,
-  getApiErrorMessage,
-} from "../api/apiClient.js";
+/* eslint-disable react-refresh/only-export-components */
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { getCurrentUser, loginRequest } from '../api/authApi'
+import { getApiErrorMessage, TOKEN_STORAGE_KEY, USER_STORAGE_KEY } from '../api/apiClient'
+import { normalizeUser } from '../utils/caseUtils'
 
-const AuthContext = createContext(null);
+const AuthContext = createContext(null)
 
-function getStoredUser() {
-  const rawUser = localStorage.getItem(USER_STORAGE_KEY);
-
-  if (!rawUser) {
-    return null;
-  }
-
+function readStoredUser() {
   try {
-    return JSON.parse(rawUser);
+    const rawUser = localStorage.getItem(USER_STORAGE_KEY)
+    return rawUser ? normalizeUser(JSON.parse(rawUser)) : normalizeUser()
   } catch {
-    localStorage.removeItem(USER_STORAGE_KEY);
-    return null;
+    localStorage.removeItem(USER_STORAGE_KEY)
+    return normalizeUser()
   }
 }
 
 function getTokenFromPayload(payload) {
-  return payload?.token || payload?.access || payload?.access_token || payload?.key;
+  return (
+    payload?.token ||
+    payload?.access ||
+    payload?.access_token ||
+    payload?.key ||
+    payload?.data?.token ||
+    payload?.data?.access ||
+    payload?.data?.access_token
+  )
 }
 
 function getUserFromPayload(payload) {
-  return payload?.user || payload?.profile || null;
+  return payload?.user || payload?.profile || payload?.data?.user || payload?.data?.profile || null
 }
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() =>
-    localStorage.getItem(TOKEN_STORAGE_KEY),
-  );
-  const [user, setUser] = useState(getStoredUser);
-  const [isUserLoading, setIsUserLoading] = useState(false);
+  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_STORAGE_KEY))
+  const [user, setUser] = useState(() => readStoredUser())
+  const [isUserLoading, setIsUserLoading] = useState(Boolean(token))
 
   const clearSession = useCallback(() => {
-    localStorage.removeItem(TOKEN_STORAGE_KEY);
-    localStorage.removeItem(USER_STORAGE_KEY);
-    setToken(null);
-    setUser(null);
-  }, []);
+    localStorage.removeItem(TOKEN_STORAGE_KEY)
+    localStorage.removeItem(USER_STORAGE_KEY)
+    setToken(null)
+    setUser(normalizeUser())
+  }, [])
 
   const login = useCallback(async (credentials) => {
-    const payload = await loginRequest(credentials);
-    const nextToken = getTokenFromPayload(payload);
-    const nextUser = getUserFromPayload(payload);
+    const payload = await loginRequest(credentials)
+    const nextToken = getTokenFromPayload(payload)
+    const payloadUser = getUserFromPayload(payload)
 
     if (!nextToken) {
-      throw new Error("Login succeeded but no token was returned.");
+      throw new Error('Login succeeded, but no token was returned by the API.')
     }
 
-    localStorage.setItem(TOKEN_STORAGE_KEY, nextToken);
-    setToken(nextToken);
+    localStorage.setItem(TOKEN_STORAGE_KEY, nextToken)
+    setToken(nextToken)
 
-    if (nextUser) {
-      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(nextUser));
-      setUser(nextUser);
+    if (payloadUser) {
+      const nextUser = normalizeUser(payloadUser)
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(nextUser))
+      setUser(nextUser)
     }
 
-    return payload;
-  }, []);
+    return payload
+  }, [])
 
   const refreshUser = useCallback(async () => {
     if (!localStorage.getItem(TOKEN_STORAGE_KEY)) {
-      return null;
+      return null
     }
 
-    setIsUserLoading(true);
+    setIsUserLoading(true)
 
     try {
-      const nextUser = await getCurrentUserRequest();
-      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(nextUser));
-      setUser(nextUser);
-      return nextUser;
+      const nextUser = normalizeUser(await getCurrentUser())
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(nextUser))
+      setUser(nextUser)
+      return nextUser
     } finally {
-      setIsUserLoading(false);
+      setIsUserLoading(false)
     }
-  }, []);
+  }, [])
 
   useEffect(() => {
     function handleAuthExpired() {
-      clearSession();
+      clearSession()
     }
 
-    window.addEventListener("auth:expired", handleAuthExpired);
-    return () => window.removeEventListener("auth:expired", handleAuthExpired);
-  }, [clearSession]);
+    window.addEventListener('auth:expired', handleAuthExpired)
+    return () => window.removeEventListener('auth:expired', handleAuthExpired)
+  }, [clearSession])
 
   useEffect(() => {
-    if (token && !user) {
-      refreshUser().catch(() => {
-        clearSession();
-      });
+    let timer
+
+    if (!token) {
+      timer = window.setTimeout(() => setIsUserLoading(false), 0)
+      return () => window.clearTimeout(timer)
     }
-  }, [clearSession, refreshUser, token, user]);
+
+    timer = window.setTimeout(() => {
+      refreshUser().catch(() => {
+        clearSession()
+      })
+    }, 0)
+
+    return () => window.clearTimeout(timer)
+  }, [token, refreshUser, clearSession])
 
   const value = useMemo(
     () => ({
@@ -117,18 +119,18 @@ export function AuthProvider({ children }) {
       refreshUser,
       getApiErrorMessage,
     }),
-    [clearSession, isUserLoading, login, refreshUser, token, user],
-  );
+    [token, user, isUserLoading, login, clearSession, refreshUser],
+  )
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
+  const context = useContext(AuthContext)
 
   if (!context) {
-    throw new Error("useAuth must be used inside AuthProvider.");
+    throw new Error('useAuth must be used within an AuthProvider')
   }
 
-  return context;
+  return context
 }
